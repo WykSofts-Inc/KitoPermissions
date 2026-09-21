@@ -107,6 +107,7 @@ public actor KitoPermissionManager {
     private static func map(_ status: CNAuthorizationStatus) -> KitoPermissionStatus {
         switch status {
         case .authorized: return .granted
+        case .limited: return .granted
         case .denied: return .denied
         case .restricted: return .restricted
         case .notDetermined: return .notDetermined
