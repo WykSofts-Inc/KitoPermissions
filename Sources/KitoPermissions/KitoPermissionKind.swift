@@ -7,7 +7,12 @@
 //
 
 public enum KitoPermissionKind: CaseIterable, Sendable {
-    case camera, photoLibrary, microphone, locationWhenInUse, notifications, contacts
+    case camera, photoLibrary, microphone
+    case locationWhenInUse, locationAlways
+    case notifications, contacts
+    case calendar, reminders
+    case speechRecognition, mediaLibrary
+    case bluetooth, tracking
 }
 
 public enum KitoPermissionStatus: Equatable, Sendable {

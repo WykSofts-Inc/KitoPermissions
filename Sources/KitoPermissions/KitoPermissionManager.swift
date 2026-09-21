@@ -11,10 +11,16 @@ import Photos
 import CoreLocation
 import Contacts
 import UserNotifications
+import EventKit
+import Speech
+import MediaPlayer
+import CoreBluetooth
+import AppTrackingTransparency
 
-/// One async API over six different system permission APIs, each with its
-/// own callback/delegate shape. Callers never touch `AVCaptureDevice`,
-/// `PHPhotoLibrary`, or `CNContactStore` directly.
+/// One async API over thirteen different system permission APIs, each with
+/// its own callback/delegate/completion-handler shape. Callers never touch
+/// `AVCaptureDevice`, `PHPhotoLibrary`, `EKEventStore`, `CBCentralManager`,
+/// or any of the others directly.
 public actor KitoPermissionManager {
     public static let shared = KitoPermissionManager()
 
@@ -28,6 +34,8 @@ public actor KitoPermissionManager {
             return Self.map(PHPhotoLibrary.authorizationStatus(for: .readWrite))
         case .locationWhenInUse:
             return Self.map(CLLocationManager().authorizationStatus)
+        case .locationAlways:
+            return Self.mapAlways(CLLocationManager().authorizationStatus)
         case .contacts:
             return Self.map(CNContactStore.authorizationStatus(for: .contacts))
         case .notifications:
@@ -38,6 +46,18 @@ public actor KitoPermissionManager {
             case .notDetermined: return .notDetermined
             @unknown default: return .notDetermined
             }
+        case .calendar:
+            return Self.map(EKEventStore.authorizationStatus(for: .event))
+        case .reminders:
+            return Self.map(EKEventStore.authorizationStatus(for: .reminder))
+        case .speechRecognition:
+            return Self.map(SFSpeechRecognizer.authorizationStatus())
+        case .mediaLibrary:
+            return Self.map(MPMediaLibrary.authorizationStatus())
+        case .bluetooth:
+            return Self.map(CBManager.authorization)
+        case .tracking:
+            return Self.map(ATTrackingManager.trackingAuthorizationStatus)
         }
     }
 
@@ -61,6 +81,8 @@ public actor KitoPermissionManager {
             // async form; callers needing live updates should use
             // CLLocationManager directly. This reports current status only.
             return await status(for: .locationWhenInUse)
+        case .locationAlways:
+            return await status(for: .locationAlways)
         case .contacts:
             return await withCheckedContinuation { continuation in
                 CNContactStore().requestAccess(for: .contacts) { granted, _ in
@@ -71,6 +93,37 @@ public actor KitoPermissionManager {
             let center = UNUserNotificationCenter.current()
             let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
             return granted ? .granted : .denied
+        case .calendar:
+            let granted = (try? await EKEventStore().requestFullAccessToEvents()) ?? false
+            return granted ? .granted : .denied
+        case .reminders:
+            let granted = (try? await EKEventStore().requestFullAccessToReminders()) ?? false
+            return granted ? .granted : .denied
+        case .speechRecognition:
+            return await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { status in
+                    continuation.resume(returning: Self.map(status))
+                }
+            }
+        case .mediaLibrary:
+            return await withCheckedContinuation { continuation in
+                MPMediaLibrary.requestAuthorization { status in
+                    continuation.resume(returning: Self.map(status))
+                }
+            }
+        case .bluetooth:
+            // CoreBluetooth has no explicit "request" call — the system
+            // prompt appears the first time a CBCentralManager is actually
+            // used. Standing one up and waiting for its first state update
+            // is what triggers (and resolves) that prompt.
+            await KitoBluetoothAuthorizationWaiter().waitForResolution()
+            return Self.map(CBManager.authorization)
+        case .tracking:
+            return await withCheckedContinuation { continuation in
+                ATTrackingManager.requestTrackingAuthorization { status in
+                    continuation.resume(returning: Self.map(status))
+                }
+            }
         }
     }
 
@@ -104,7 +157,43 @@ public actor KitoPermissionManager {
         }
     }
 
+    /// Unlike the general location mapping, "when in use" alone doesn't
+    /// satisfy an Always request — only `.authorizedAlways` counts as
+    /// granted here, so a screen asking for background location doesn't
+    /// show a misleading "granted" for a scope it doesn't actually have.
+    private static func mapAlways(_ status: CLAuthorizationStatus) -> KitoPermissionStatus {
+        switch status {
+        case .authorizedAlways: return .granted
+        case .authorizedWhenInUse, .denied: return .denied
+        case .restricted: return .restricted
+        case .notDetermined: return .notDetermined
+        @unknown default: return .notDetermined
+        }
+    }
+
     private static func map(_ status: CNAuthorizationStatus) -> KitoPermissionStatus {
+        switch status {
+        case .authorized: return .granted
+        case .limited: return .granted
+        case .denied: return .denied
+        case .restricted: return .restricted
+        case .notDetermined: return .notDetermined
+        @unknown default: return .notDetermined
+        }
+    }
+
+    private static func map(_ status: EKAuthorizationStatus) -> KitoPermissionStatus {
+        switch status {
+        case .fullAccess, .authorized: return .granted
+        case .writeOnly: return .granted
+        case .denied: return .denied
+        case .restricted: return .restricted
+        case .notDetermined: return .notDetermined
+        @unknown default: return .notDetermined
+        }
+    }
+
+    private static func map(_ status: SFSpeechRecognizerAuthorizationStatus) -> KitoPermissionStatus {
         switch status {
         case .authorized: return .granted
         case .denied: return .denied
@@ -112,5 +201,55 @@ public actor KitoPermissionManager {
         case .notDetermined: return .notDetermined
         @unknown default: return .notDetermined
         }
+    }
+
+    private static func map(_ status: MPMediaLibraryAuthorizationStatus) -> KitoPermissionStatus {
+        switch status {
+        case .authorized: return .granted
+        case .denied: return .denied
+        case .restricted: return .restricted
+        case .notDetermined: return .notDetermined
+        @unknown default: return .notDetermined
+        }
+    }
+
+    private static func map(_ status: CBManagerAuthorization) -> KitoPermissionStatus {
+        switch status {
+        case .allowedAlways: return .granted
+        case .denied: return .denied
+        case .restricted: return .restricted
+        case .notDetermined: return .notDetermined
+        @unknown default: return .notDetermined
+        }
+    }
+
+    private static func map(_ status: ATTrackingManager.AuthorizationStatus) -> KitoPermissionStatus {
+        switch status {
+        case .authorized: return .granted
+        case .denied: return .denied
+        case .restricted: return .restricted
+        case .notDetermined: return .notDetermined
+        @unknown default: return .notDetermined
+        }
+    }
+}
+
+/// Stands up a `CBCentralManager` just long enough to receive its first
+/// state update — the moment CoreBluetooth resolves (or triggers) the
+/// authorization prompt — then lets it go.
+private final class KitoBluetoothAuthorizationWaiter: NSObject, CBCentralManagerDelegate, @unchecked Sendable {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var manager: CBCentralManager?
+
+    func waitForResolution() async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            self.manager = CBCentralManager(delegate: self, queue: nil)
+        }
+    }
+
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        continuation?.resume()
+        continuation = nil
     }
 }
