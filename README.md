@@ -1,5 +1,7 @@
 # KitoPermissions
 
+**Documentation:** [KitoPermissions docs](https://wyksofts-inc.github.io/KitoPermissions/documentation/kitopermissions/) · [KitoPermissionsTracking docs](https://wyksofts-inc.github.io/KitoPermissions/documentation/kitopermissionstracking/)
+
 One async API over camera, photo library, microphone, location, contacts,
 notification and eight more system permissions — plus priming screens that
 explain *why* before the one-shot system prompt, a Settings recovery when the
