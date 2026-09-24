@@ -75,6 +75,12 @@ init() { KitoPermissionsTracking.register() }
 **Migrating from 1.0:** apps that requested `.tracking` must add the
 `KitoPermissionsTracking` product and call `register()`; nothing else changes.
 
+## Right-to-left
+
+Primers, the dashboard and the banner mirror automatically in right-to-left layouts. The
+dashboard's "Settings" link arrow uses `arrow.up.forward`, so it points the right way in Arabic or
+Hebrew. Copy is English; localise the strings you pass in.
+
 ## Samples
 
 **Check then request:**

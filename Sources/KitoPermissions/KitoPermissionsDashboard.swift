@@ -168,7 +168,7 @@ public struct KitoPermissionsDashboard: View {
                 Button {
                     if let url = kind.settingsURL { openURL(url) }
                 } label: {
-                    HStack(spacing: 3) { Text("Settings"); Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold)) }
+                    HStack(spacing: 3) { Text("Settings"); Image(systemName: "arrow.up.forward").font(.system(size: 10, weight: .bold)) }
                 }
                 .buttonStyle(KitoPermissionCapsuleStyle(fill: theme.colors.danger.opacity(0.12), label: theme.colors.danger, compact: true))
                 .accessibilityLabel("\(kind.displayName) is off. Open Settings")
