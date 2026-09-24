@@ -15,12 +15,16 @@ import EventKit
 import Speech
 import MediaPlayer
 import CoreBluetooth
-import AppTrackingTransparency
 
 /// One async API over thirteen different system permission APIs, each with
 /// its own callback/delegate/completion-handler shape. Callers never touch
 /// `AVCaptureDevice`, `PHPhotoLibrary`, `EKEventStore`, `CBCentralManager`,
 /// or any of the others directly.
+///
+/// App Tracking lives in the separate `KitoPermissionsTracking` product so apps
+/// that don't track never link AppTrackingTransparency (App Store validation
+/// then demands `NSUserTrackingUsageDescription`). Without it, `.tracking`
+/// reports `.notDetermined` and requesting it does nothing.
 public actor KitoPermissionManager {
     public static let shared = KitoPermissionManager()
 
@@ -57,7 +61,7 @@ public actor KitoPermissionManager {
         case .bluetooth:
             return Self.map(CBManager.authorization)
         case .tracking:
-            return Self.map(ATTrackingManager.trackingAuthorizationStatus)
+            return await KitoPermissionHandlerRegistry.handler(for: .tracking)?.status() ?? .notDetermined
         }
     }
 
@@ -65,6 +69,18 @@ public actor KitoPermissionManager {
     /// current status without prompting again (the OS ignores a second
     /// prompt anyway, but this keeps call sites simple: always call
     /// `request`, never branch on `status` first).
+    /// Whether this build can ask for `kind`. Only `.tracking` can be missing — it needs the
+    /// `KitoPermissionsTracking` add-on and `KitoPermissionsTracking.register()`.
+    public nonisolated func isSupported(_ kind: KitoPermissionKind) -> Bool {
+        kind != .tracking || KitoPermissionHandlerRegistry.handler(for: .tracking) != nil
+    }
+
+    /// Plugs in status/request code for a permission whose framework lives in an add-on
+    /// target (today: App Tracking, via `KitoPermissionsTracking.register()`).
+    public nonisolated static func register(_ handler: KitoPermissionHandler, for kind: KitoPermissionKind) {
+        KitoPermissionHandlerRegistry.set(handler, for: kind)
+    }
+
     public func request(_ kind: KitoPermissionKind) async -> KitoPermissionStatus {
         switch kind {
         case .camera:
@@ -119,11 +135,7 @@ public actor KitoPermissionManager {
             await KitoBluetoothAuthorizationWaiter().waitForResolution()
             return Self.map(CBManager.authorization)
         case .tracking:
-            return await withCheckedContinuation { continuation in
-                ATTrackingManager.requestTrackingAuthorization { status in
-                    continuation.resume(returning: Self.map(status))
-                }
-            }
+            return await KitoPermissionHandlerRegistry.handler(for: .tracking)?.request() ?? .notDetermined
         }
     }
 
@@ -222,15 +234,32 @@ public actor KitoPermissionManager {
         @unknown default: return .notDetermined
         }
     }
+}
 
-    private static func map(_ status: ATTrackingManager.AuthorizationStatus) -> KitoPermissionStatus {
-        switch status {
-        case .authorized: return .granted
-        case .denied: return .denied
-        case .restricted: return .restricted
-        case .notDetermined: return .notDetermined
-        @unknown default: return .notDetermined
-        }
+/// Status and request code for one permission, supplied by an add-on target.
+public struct KitoPermissionHandler: Sendable {
+    public var status: @Sendable () async -> KitoPermissionStatus
+    public var request: @Sendable () async -> KitoPermissionStatus
+
+    public init(
+        status: @escaping @Sendable () async -> KitoPermissionStatus,
+        request: @escaping @Sendable () async -> KitoPermissionStatus
+    ) {
+        self.status = status
+        self.request = request
+    }
+}
+
+enum KitoPermissionHandlerRegistry {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var handlers: [KitoPermissionKind: KitoPermissionHandler] = [:]
+
+    static func handler(for kind: KitoPermissionKind) -> KitoPermissionHandler? {
+        lock.withLock { handlers[kind] }
+    }
+
+    static func set(_ handler: KitoPermissionHandler?, for kind: KitoPermissionKind) {
+        lock.withLock { handlers[kind] = handler }
     }
 }
 
